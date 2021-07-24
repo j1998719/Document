@@ -1,3 +1,4 @@
+github沒有支援公式，正常顯示版本[請點連結](https://hackmd.io/i9XwMTzMSm-I-eFtb7lhhA?both)。
 #  Uniswap trace code 
 
 ## 引言
@@ -9,128 +10,295 @@
 
 Uniswap最重要的是池子裡的token數量要夠多才能有足夠流動性提供給大家交易。如果用戶想要參與這個項目，就可以預先在池子兩邊同時存入等值的token給人家來交易，賺取手續費。每一次交易都需要支付0.3%作為手續費，這個手續費會平分給所有有提供流動性的人。用戶提供流動性之後會領取LP token當作流動性的證明，可以在日後返回LP token並領回當初存入的幣加上中間得到的手續費(這邊不會討論無償損失的問題)。
 
+## 架構
+Uniswap分成core和periphery。core部分是Uniswap的主要架構，採用一個極簡約的設計。Core分成Factory和Pair兩個部分。由Factory創建並記錄所有的交易對，也就是Pair。
+
+* Factory
+![](https://i.imgur.com/nqKBYpi.png)
+
+* Pair
+每個Pair都具有交易以及流動性操作的功能，pair同時也是LP token的地址，由Pair管理該交易池的流動性。
+![](https://i.imgur.com/75Z9fPY.png)
+
+
+* Router
+Router負責進行兌換以及流動性操作的安全性檢查，也就是說swap時的交易價格是由router計算在和pair互動。pair只會對池子內的恆定乘積公式進行確認。另外router也會處理多跳躍交易，當想要進行swap的交易對不直接存在時，router可以進行多次的連續交易，兌換出想要的代幣。
+![](https://uniswap.org/static/c89a7f55518c0d6ca47d4b4813722c01/ec9b3/v2_swaps.png)
+
+[Whitepaper](https://uniswap.org/whitepaper.pdf)
+===
+
+
 ![image alt](https://uniswap.org/static/40a3fe965d188286abe8502f68ef42a1/4eea2/trade.jpg)
 \- reference: https://uniswap.org/ 
 
-然而價格計算的方式並不真的是前面提到完全依照token的比例決定，進行swap的方式是會有滑價的，那麼滑價是怎麼來的呢。滑價是來自價格計算的恆定乘積公式
+在兌換代幣的時候，會隨著數量增加而產生滑價，那麼滑價是怎麼來的呢。滑價是來自價格計算的恆定乘積公式
+$$x*y=k$$
+這裡x,y分別是池子裡兩個token的數量，也就是說原本池子裡有 $x_0,y_0$ 個token，如果想要交易$x_{in}$個token，那麼能夠換到的 $y_{out}$ 數量就是:
+$$y_{out} = {x_{in}* y_0 \over x_0 + x_{in}}$$
 
-![image](https://user-images.githubusercontent.com/32996153/126069668-4a511712-5d2c-4614-bc8a-764c926da44b.png)
+檢查兌換完之後的恆定乘積公式:
 
-這裡x,y分別是池子裡兩個token的數量，也就是說原本池子裡有 ![image](https://user-images.githubusercontent.com/32996153/126069886-a4a41fe4-8184-4ad1-a773-487799991084.png) 個token，如果想要交易![image](https://user-images.githubusercontent.com/32996153/126069897-f1617417-e445-4604-b14e-91dc24d28027.png)個token，那麼能夠換到的 ![image](https://user-images.githubusercontent.com/32996153/126069904-491622ee-ded8-46a3-b849-694a1f9c9e24.png) 數量就是:
+$$(x_0 + x_{in}) * (y_0 - y_{out}) =  x_{0} * y_0 + x_{in} * y_0 - x_{in} * y_0 = k $$
 
-![image](https://user-images.githubusercontent.com/32996153/126069675-22598b32-5994-4c17-af7f-fdcc5bd87cc6.png)
+這邊兌換的價格就是
 
-這邊可以注意到每次交易的時候理論上不會影響到k的值，但是實際上會，因為實際上能換到的
+$${y_{out} \over x_{in} }= {y_0 \over x_0 + x_{in}}$$
 
-![image](https://user-images.githubusercontent.com/32996153/126069687-b681be70-7e51-4b8a-99ad-e775f0e7b694.png)
+隨著交易量增加，可能產生的滑價也越大。流動性越大對於滑價的影響也越小，Uniswap需要讓大家願意提供流動性進交易池中，因此有了手續費的設計。每次交易都會需要支付0.3%的手續費，依照提供流動性的大小給提供流動性的人。因此實際上能換到的數量是
 
-有0.3%拿去當作手續費了，因此k還是會微幅增長。另外，在注入流動性的時候也會增加k的值，這部份之後會提到。
+$$y_{out} = {0.997x_{in}* y_0 \over x_0 + 0.997x_{in}} = {997x_{in}* y_0 \over 1000x_0 + 997x_{in}}$$
 
-## Uniswap whitepaper 
-\-reference: https://uniswap.org/whitepaper.pdf
+反過來說給定$y_{out}$，算出來的$x_{in}$是
 
-大概介紹完uniswap的運行機制之後，就可以對一些技術細節進行討論，白皮書在這裡提供很詳細的資料。
+$$1000x_0*y_{out} + 997x_{in}*y_{out}  = {997x_{in}* y_0 }$$
 
-### ERC-20
-交易對任何人只要有辦法提供足夠的流動性都可以創造自己的交易對，前提是必須要是ERC-20的token，而我們知道ETH是以太坊的原生幣種，不滿足ERC-20的協議因此在實作上都會針對ETH最特別處理。另一方面，如果想要的交易對還沒被建立，又沒有人提供足夠的流動性創造交易對，那麼就只能透過router進行代幣交換。
+$$x_{in} = {1000x_0*y_{out} \over 997y_0-997y_{out}}$$
 
-### 價格預言機
-許多DeFi項目都會透過Uniswap當作價格預言機，雖然有有提到滑價的公式，大致上仍是以兩個資產的數量作為價格計算依據:
+理論上交易不會影響到k的值，因為每次交易都會有手續費留在池底，k值還是會微幅增長。
 
-![image](https://user-images.githubusercontent.com/32996153/126069725-f13a825d-e976-436b-a0f3-45ee461c8fda.png)
-
-r是t時點a,b token的存量，t是區塊高度。
-
-只採用一個時刻的價格容易讓其他項目被攻擊，攻擊者可以發動閃電貸，刻意擾動價格，讓其他項目取得錯誤價格資訊，攻擊者藉此套利，完成之後再把歸還借來的錢就可以了。為此，uniswap隱藏了交易對token存量的資訊，採用時間累進價格計算方式，讓其他項目只能知道時間內的平均價格，首先，定義一個![image](https://user-images.githubusercontent.com/32996153/126069940-78782d03-b2cd-44e0-85c8-e722358e4c1a.png):
-
-![image](https://user-images.githubusercontent.com/32996153/126069728-0b25adde-ee23-45cc-b204-f07bf64c8527.png)
-
-如果想要知道![image](https://user-images.githubusercontent.com/32996153/126070004-93b40fc5-8495-49b3-810b-cccc3d092c2e.png) 到 ![image](https://user-images.githubusercontent.com/32996153/126070022-74f8064a-b2ea-47d1-8adf-0a1809caa83d.png)的平均價格，要在![image](https://user-images.githubusercontent.com/32996153/126070007-ad0bf6d6-a1db-4214-b3ce-815884c860c0.png) 和 ![image](https://user-images.githubusercontent.com/32996153/126070025-f7697e69-f6fa-42b1-96b3-bc8d5051b5ca.png)分別存去![image](https://user-images.githubusercontent.com/32996153/126069948-51902756-319c-43f4-8e77-a88ced862699.png)，然後:
-
-![image](https://user-images.githubusercontent.com/32996153/126069738-27db00fe-0c6d-45c7-a89b-5b72109b8c59.png)
-
-### 精確度
-價格是一個有小數點的比例資訊，但是solidity不支援非整數的型態，因此uniswap用2進位方式儲存價格(UQ112.112)，代表在小數點的前後有112位元來儲存價格，因此價格的精確度可以到![image](https://user-images.githubusercontent.com/32996153/126070039-4471e282-e59b-42a5-a1c9-dabdd9c74ce4.png)。
-
-UQ112.112總共佔224位元，可以用uint224來儲存，離256位元還有32位元的空間。另一方面，交易池裡的token存量也是用uint112儲存，剩下的32位元就拿來儲存時間戳。用32位元儲存時間戳代表在大約136年後時間戳會發生溢位，也就是2106/02/07，uniswap很簡單的使用mod來避免此問題。
-
-token存量同樣有溢位的的問題，![image](https://user-images.githubusercontent.com/32996153/126070049-c780914e-e816-4dcb-8e72-b58124841e9a.png)大約是5e33，如果有幣種存入超過這個數字就會發生問題，目前限量發行的token沒有超過這個數字的總量，但是無限量發行的token就有可能發生問題。
+```solidity=
+// given an input amount of an asset and pair reserves, returns the maximum output amount of the other asset
+function getAmountOut(uint amountIn, uint reserveIn, uint reserveOut) internal pure returns (uint amountOut) {
+    require(amountIn > 0, 'UniswapV2Library: INSUFFICIENT_INPUT_AMOUNT');
+    require(reserveIn > 0 && reserveOut > 0, 'UniswapV2Library: INSUFFICIENT_LIQUIDITY');
+    uint amountInWithFee = amountIn.mul(997);
+    uint numerator = amountInWithFee.mul(reserveOut);
+    uint denominator = reserveIn.mul(1000).add(amountInWithFee);
+    amountOut = numerator / denominator;
+    }
+    
+function getAmountIn(uint amountOut, uint reserveIn, uint reserveOut) internal pure returns (uint amountIn) {
+    require(amountOut > 0, 'UniswapV2Library: INSUFFICIENT_OUTPUT_AMOUNT');
+    require(reserveIn > 0 && reserveOut > 0, 'UniswapV2Library: INSUFFICIENT_LIQUIDITY');
+    uint numerator = reserveIn.mul(amountOut).mul(1000);
+    uint denominator = reserveOut.sub(amountOut).mul(997);
+    amountIn = (numerator / denominator).add(1); // 避免 amountIn = 0
+}
+```
 
 
-### 閃電貸
-Uniswap V1不支援閃電貸，使用者需要將token存入交易池裡面之後才能換出想要的token，Uniswap V2為了支援閃電貸，改變了這種機制。透過特別的方式，使用者可以預先借入token，然後在合約結束成完成還款就可以。如果失敗，整筆交易都會被逆轉，回到借款之前的狀態。
-
-在還款時不限於要完成整個swap，當用戶借出token1不代表需要歸還等值的token0，選擇歸還token1也可以。這功能其實代表Uniswap是支援flash swap以及flash loan的，對使用者來說有很大的自由度。
-
-### 手續費
-手續費是提供流動性的報酬，每次交易都需要負擔0.3%作為手續費，手續費中有1/6會是給Uniswap團隊，另外5/6給提供流動性的人。
-
-首先，要先衡量流動性，流動性是交易池內兩個token的幾何平均數:
-
-![image](https://user-images.githubusercontent.com/32996153/126069746-6637fecd-ae75-4d12-b5a6-baa6fb442936.png)
-
-這樣定義的好處是進行交易的時候，x, y的值改變，但是k不變，也因此liquidity不會改變。注入流動性的時候，假設分別注入兩倍的x, y，則:
-
-![image](https://user-images.githubusercontent.com/32996153/126069759-9cafa867-ebed-4e21-95db-6f8b131dae5f.png)
-
-因為能換得token只有變成3倍，而不是9倍。
-
-考慮實際情形，進行swap需要支付0.3%手續費，手續費只會以單邊的token支付:
-
-![image](https://user-images.githubusercontent.com/32996153/126069766-46ec0376-2561-4f4e-b84b-d53c0c91cd3b.png)
-
-手續費不是每次發生交易就馬上分發給提供流動性的人，只有在注入或是提取流動性的時候才會進行分配，也只有在這兩個時候才會計算k值。改變k值的原因只有兩個，交易手續費或是注入及提取流動性，在前述兩個時點計算k值可以很好的區隔出k值改變的原因，也因此可以拿來計算累積的手續費。假設要計算![image](https://user-images.githubusercontent.com/32996153/126070082-517c71d0-c4ea-484a-89c7-629909543dc9.png)到![image](https://user-images.githubusercontent.com/32996153/126070098-7faf226b-4adf-4911-b628-1f72d186b1e2.png)的累積手續費![image](https://user-images.githubusercontent.com/32996153/126070076-f73d01f1-874a-4e39-b44e-4e376d992c65.png):
-
-![image](https://user-images.githubusercontent.com/32996153/126069778-dc3d4f7d-8be5-4c80-9b36-d4437fede23a.png)
-
-另外，有1/6的手續費是歸給協議，方式是藉由分發LP token給協議方。前面提到，提供流動性的人依照獲得的LP token佔總供應量的比例得到手續費，將LP token分給協議方會稀釋所有人的份額，達到獲得手續費的效果。![image](https://user-images.githubusercontent.com/32996153/126070123-afd48554-9f95-4293-a337-9f07a485b4b4.png)是在![image](https://user-images.githubusercontent.com/32996153/126070082-517c71d0-c4ea-484a-89c7-629909543dc9.png)時的$LP token總數，![image](https://user-images.githubusercontent.com/32996153/126070128-60ecf9ff-b09e-4134-89bc-56cd6cf3f99a.png)是分給協議的LP token:
-
-![image](https://user-images.githubusercontent.com/32996153/126069784-3c698fc4-8211-4dcf-ba0f-7b35b276a70b.png)
-        
-### 確認手續費公式
-在不考慮手續費的情況下:
-
-![image](https://user-images.githubusercontent.com/32996153/126069806-9eae9db3-e366-4d06-9c08-76208a54e8be.png)
-
-但是收了手續費之後:
-
-![image](https://user-images.githubusercontent.com/32996153/126069812-490a4173-6e29-4fa1-a4bf-236a462ecf3c.png)
-
-為了確認手續費大於0.3%，檢驗的公式改為:
-
-![image](https://user-images.githubusercontent.com/32996153/126069827-e391d483-5d64-4db9-bb02-d5dfd75e934e.png)
-
-一般來說只要確認一邊的手續費就好，為了支援閃電交換，使用可以自由選擇用哪一邊還款，才會改成上面的式子。因為solidity不支援非整數，上式將改為:
-
-![image](https://user-images.githubusercontent.com/32996153/126069835-b2a77d1a-f1b6-44b7-a3ef-ba8a0bf7354f.png)
-
-### 流動性代幣供給
+### 流動性
 ![image alt](https://uniswap.org/static/94f9a497b001a6b27df2c37adadc05b4/824f2/lp.jpg
 )
 \- reference: https://uniswap.org/ 
 
-流動性代幣就是我們說的LP token，同樣地，流動性代幣是跟據提供的流動性計算。剛創建交易對時，獲得的流動性代幣![image](https://user-images.githubusercontent.com/32996153/126070139-abc7bcd3-68eb-4517-85f2-d476025c0f27.png):
+使用者在提供流動性的時候獲得交易手續費作為報酬，領取的比例是自己提供流動性的大小。首先要先定義流動性是甚麼，流動性是交易池內兩個token的幾何平均數:
+$$liquidity = \sqrt{k} = \sqrt{xy}$$
+這樣定義的好處是進行交易的時候，x, y的值改變，但是k不變，也因此liquidity不會改變。注入流動性的時候，假設分別注入兩倍的x, y，則:
+$$\hat {liquidity} = 3*liquidity = \sqrt{9k} = \sqrt{3x*3y}$$
+流動性只有變成3倍，因為能換得token只有變成3倍，而不是9倍。
 
-![image](https://user-images.githubusercontent.com/32996153/126069849-b91acb6f-dd3b-4380-bf7e-7a4d72c54227.png)
 
+在提供流動性後可以獲得LP token，作為日後取得手續費的依據。剛創建交易對時，獲得的流動性代幣$s_{minted}$:
+$$s_{minted} = \sqrt{x_{deposited}y_{deposited}}$$
 之後再存入流動性，獲得的代幣就是:
+$$s_{minted} = s_{0} * min({x_{deposited} \over x_{0}},{y_{deposited} \over y_{0}}) $$
 
-![image](https://user-images.githubusercontent.com/32996153/126069857-cf01e1eb-25e7-4a11-b571-944a74434b88.png)
+```solidity=
+// 存入流動性之後，獲得LP token
+function mint(address to) external lock returns (uint liquidity) {
+    (uint112 _reserve0, uint112 _reserve1,) = getReserves(); // 取得原本的存量
+    uint balance0 = IERC20(token0).balanceOf(address(this)); //更新存量
+    uint balance1 = IERC20(token1).balanceOf(address(this));
+    uint amount0 = balance0.sub(_reserve0); //計算存入多少
+    uint amount1 = balance1.sub(_reserve1);
 
-## Solidity Code
-在實作上，Uniswap將code分為core和periphery兩個部分，core是骨幹，完成創建及管理交易對的工作，並設計swap的流程以及增減流動性的框架。Periphery則是負責實際操作以及計算價格的部分，並且附上一些example code。
+    bool feeOn = _mintFee(_reserve0, _reserve1); //先分LP token給官方
+    uint _totalSupply = totalSupply; // 計算總供應量，必須在_mintFee之後
+    if (_totalSupply == 0) { // 剛建立交易對時，總供應量為0
+        //第一次投入流動性，會把一部分流動性鎖起來，不給人抽出。
+        liquidity = Math.sqrt(amount0.mul(amount1)).sub(MINIMUM_LIQUIDITY);
+       _mint(address(0), MINIMUM_LIQUIDITY); 
+    } else { 
+        // 之後的分發LP token公式，取min是因為取流動性最小那一邊，有可能存入流動性不依照reserve比例
+        liquidity = Math.min(amount0.mul(_totalSupply) / _reserve0, amount1.mul(_totalSupply) / _reserve1);
+    }
+    require(liquidity > 0, 'UniswapV2: INSUFFICIENT_LIQUIDITY_MINTED');
+    _mint(to, liquidity); // 發放 token
 
-主要程式碼分成四個部分:factory, pair, library, router02，我在gist上會有詳細的註解，這裡解釋四個檔案的架構: [link text](https://gist.github.com/fb800129aa66f1c7b37986876b4511c7.git)
-![](https://i.imgur.com/4RzsEvi.png)
-factory管理及創建pair，透過factory可以知道每個pair的地址，以及創建新的pair。pair是每一個交易對的地址，同時也是LP token的地址。pair提供swap以及增減流動性的功能。
-![](https://i.imgur.com/ecXGs49.png)
-透過router操縱pair，進行swap以及增減流動性的動作。當要進行連續多次交換的時候，router也提供相應的功能。
-![](https://i.imgur.com/YWP95JB.png)
-library提供一些功能給router調用:
-- pairFor: 輸入token地址查詢pair地址
-- quote: 查詢理論價格
-- getAmountOut: 輸入amountIn，考慮手續費後，計算可以換出的數量
-- getAmountsOut: 進行連續多次swap的時候，調用此函數
+    _update(balance0, balance1, _reserve0, _reserve1); //更新 reserve
+    if (feeOn) kLast = uint(reserve0).mul(reserve1); // reserve0 and reserve1 are up-to-date
+    emit Mint(msg.sender, amount0, amount1);
+}
+```
+獲得手續費是依照LP token佔總供應量的比例來決定的:
+```solidity=
+// call 這個function，取回流動性
+function burn(address to) external lock returns (uint amount0, uint amount1) {
+    (uint112 _reserve0, uint112 _reserve1,) = getReserves(); // gas savings
+    address _token0 = token0;                                // gas savings
+    address _token1 = token1;                                // gas savings
+    uint balance0 = IERC20(_token0).balanceOf(address(this));
+    uint balance1 = IERC20(_token1).balanceOf(address(this));
+    uint liquidity = balanceOf[address(this)];
+
+    bool feeOn = _mintFee(_reserve0, _reserve1);
+    uint _totalSupply = totalSupply; // gas savings, must be defined here since totalSupply can update in _mintFee
+    amount0 = liquidity.mul(balance0) / _totalSupply; // balance*LP token佔總供應量的比例 = 可以領回的 amount
+    amount1 = liquidity.mul(balance1) / _totalSupply; 
+    require(amount0 > 0 && amount1 > 0, 'UniswapV2: INSUFFICIENT_LIQUIDITY_BURNED'); // amount > 0
+    _burn(address(this), liquidity); // 把 LP token 銷毀
+    _safeTransfer(_token0, to, amount0); // 把 token 連同手續費還回去
+    _safeTransfer(_token1, to, amount1);
+    balance0 = IERC20(_token0).balanceOf(address(this)); //確認新的balance
+    balance1 = IERC20(_token1).balanceOf(address(this));
+
+    _update(balance0, balance1, _reserve0, _reserve1); //更新 reserve
+    if (feeOn) kLast = uint(reserve0).mul(reserve1); // 更新流動性
+    emit Burn(msg.sender, amount0, amount1, to);
+}
+```
+
+### feeOn
+大家會注意到上面出現feeOn這個變數，因為手續費不會全部給流動性提供者，而是有1/6會留給官方，也就是0.05%。官方收取手續費的方式是，每次發生存入或取出流動性的時候，solidity會記錄兩次事件發生中間流動性的差距，代表手續費的累積。_mintFee(_reserve0, _reserve1)會生成 LP token 轉給官方指定的地址，稀釋其他人的LP token比例，當作手續費。
+
+假設原本池子的流動性是$\sqrt k_1$，經過一段交易之後，流動性增加成$\sqrt k_2$。我們定義:
+$$f_{1,2} = 1-{\sqrt{k_1} \over \sqrt{k_2}}$$
+是這段時間收取的流動性佔現在池子流動性的比例。其中要分1/6給官方，因此:
+$$ {1 \over6} f_{1,2} = {s_m \over {s_m + s_1}} $$
+$$ s_m = {{\sqrt k_2 - \sqrt k_1} \over 5 {\sqrt k_2 + \sqrt k_1}} * s_1$$
+$s_1$ 是在 $t_1$ 時的LP token總數，$s_m$ 是分給協議的LP token。
+
+這樣定義的好處是可以確實只收取手續費，如果每次發LP token的時候，都把1/6的部分給官方，就會把本金也一併抽走。
+
+
+
+```solidity=
+function _mintFee(uint112 _reserve0, uint112 _reserve1) private returns (bool feeOn) {
+    address feeTo = IUniswapV2Factory(factory).feeTo(); // 官方指定的地址
+    feeOn = feeTo != address(0); // 檢查有沒有設定地址
+    uint _kLast = kLast; //上一次的 k
+    if (feeOn) { 
+        if (_kLast != 0) {
+            uint rootK = Math.sqrt(uint(_reserve0).mul(_reserve1)); // 現在的流動性
+            uint rootKLast = Math.sqrt(_kLast); // 上次的流動性
+            if (rootK > rootKLast) { // 檢查流動性有沒有變多，沒有交易流動性就不變
+                uint numerator = totalSupply.mul(rootK.sub(rootKLast)); //手續費計算公式
+                uint denominator = rootK.mul(5).add(rootKLast); // 計算官方應該分到多少 LP token
+                uint liquidity = numerator / denominator; 
+                if (liquidity > 0) _mint(feeTo, liquidity); // LP token 轉給官方地址
+            }
+        }
+    } else if (_kLast != 0) { 
+        //如果地址從有改成無，之後的時間就不再收取手續費，直到再次指定為止。
+        kLast = 0;
+    }
+}
+```
+
+### 價格預言機
+Uniswap除了代幣交換以外，還提供價格預言機的功能給其他Dapp使用。如果採用即時的價格資訊，有可能被攻擊者惡意擾動交易池並從中獲利，因此Uniswap特別提供時間加權的價格給其他項目存取。
+
+在每一個時間的價格是由兩種代幣的比例決定的:
+$$P_t = {r^a_t \over r^b_t}$$
+r是t時點a,b token的存量，t是區塊高度。
+定義一個 $a_t$ ，把每一期的價格都進行累加:
+$$a_t =\sum^t_{i=0} P_i$$
+
+如果想要知道 $t_1 到 t_2$ 的平均價格，要在 $t_1 和 t_2分別存取 a_t$，然後:
+$$ P_{t_1,t_2} = {a_{t_2} - a_{t_1} \over {t_2} - {t_1}}$$
+其他Dapp可以自由決定時間區段的長度，區段越長平均價格變化越慢，對攻擊者來說擾動價格更困難，價格預言機也就越安全。
+```solidity=
+// 只有在block的一開始會更新reserve，因此reserve不是及時的存量
+// balance 是要更新的存量
+function _update(uint balance0, uint balance1, uint112 _reserve0, uint112 _reserve1) private {
+    require(balance0 <= uint112(-1) && balance1 <= uint112(-1), 'UniswapV2: OVERFLOW');
+    uint32 blockTimestamp = uint32(block.timestamp % 2**32); // 時間戳其實是 mod 函數
+    uint32 timeElapsed = blockTimestamp - blockTimestampLast; // 經過的block
+    if (timeElapsed > 0 && _reserve0 != 0 && _reserve1 != 0) { //不同block才會進行更新
+        // * never overflows, and + overflow is desired
+        price0CumulativeLast += uint(UQ112x112.encode(_reserve1).uqdiv(_reserve0)) * timeElapsed; //用整數做浮點數運算
+        price1CumulativeLast += uint(UQ112x112.encode(_reserve0).uqdiv(_reserve1)) * timeElapsed; // 計算時間累積價格
+    }
+    reserve0 = uint112(balance0); //更新reserve
+    reserve1 = uint112(balance1);
+    blockTimestampLast = blockTimestamp; //更新時間戳
+    emit Sync(reserve0, reserve1); // 事件
+}
+```
+
+### 精確度與記憶體
+UQ112X112是一個專門處理定點數的函示庫，定點數是一種要求小數點前後位數固定的數。solidity支援整數的型態，用UQ112X112讓solidity在小數點前後各有112位元來儲存價格，因此價格的精確度可以到 $1 \over 2^{112}$。
+
+另一方面，solidity在進行記憶體打包的時候是每256位元一起打包，UQ112X112總共佔224位元，剩下32位元的空間用來儲存時間戳資訊。另用32位元其實不一定很夠，到2106/02/07就有可能發生溢位，uniswap使用mod來避免這個問題。
+
+### 閃電貸
+除了預言機以外，Uniswap也支援閃電貸的功能。原本使用者需要先將token存入交易池才能進行swap token，Uniswap V2 改變了這個機制。透過特別的方式，使用者可以預先借入token，然後在合約結束前完成還款。如果失敗，整筆交易都會被逆轉，回到借款之前的狀態。
+
+在還款時不限於要完成整個swap的流程，可以借A還A或是借A還B，這代表 Uniswap 同時可以進行flash swap 以及 flash loan，對使用者來說有很大的自由度。
+
+```solidity=
+// Swap: 核心，這裡支援閃電交換
+//傳入data通常是空字串，如果不是，代表要進行閃電交換
+function swap(uint amount0Out, uint amount1Out, address to, bytes calldata data) external lock {
+    require(amount0Out > 0 || amount1Out > 0, 'UniswapV2: INSUFFICIENT_OUTPUT_AMOUNT'); // 兩者一正一為 0
+    (uint112 _reserve0, uint112 _reserve1,) = getReserves(); // gas savings
+    require(amount0Out < _reserve0 && amount1Out < _reserve1, 'UniswapV2: INSUFFICIENT_LIQUIDITY'); //確認是否足夠供應要領的量
+
+    uint balance0;
+    uint balance1;
+
+    { // scope for _token{0,1}, avoids stack too deep errors
+    address _token0 = token0;
+    address _token1 = token1;
+    require(to != _token0 && to != _token1, 'UniswapV2: INVALID_TO'); //確認 token 是否正常
+    if (amount0Out > 0) _safeTransfer(_token0, to, amount0Out); // 將要求的 token 轉出
+    if (amount1Out > 0) _safeTransfer(_token1, to, amount1Out); // 
+    if (data.length > 0) IUniswapV2Callee(to).uniswapV2Call(msg.sender, amount0Out, amount1Out, data); //自行定義uniswapV2Call(閃電貸)
+    balance0 = IERC20(_token0).balanceOf(address(this));                                               
+    balance1 = IERC20(_token1).balanceOf(address(this)); // 確認balance
+    }
+
+    // 一般的swap是先存入錢，在轉錢出去，閃電貸則相反
+    uint amount0In = balance0 > _reserve0 - amount0Out ? balance0 - (_reserve0 - amount0Out) : 0;
+    uint amount1In = balance1 > _reserve1 - amount1Out ? balance1 - (_reserve1 - amount1Out) : 0;
+    require(amount0In > 0 || amount1In > 0, 'UniswapV2: INSUFFICIENT_INPUT_AMOUNT'); //確認是不是真的有存錢進來
+
+    // 確認是否有足夠手續費
+    { // scope for reserve{0,1}Adjusted, avoids stack too deep errors
+    uint balance0Adjusted = balance0.mul(1000).sub(amount0In.mul(3));
+    uint balance1Adjusted = balance1.mul(1000).sub(amount1In.mul(3));
+    require(balance0Adjusted.mul(balance1Adjusted) >= uint(_reserve0).mul(_reserve1).mul(1000**2), 'UniswapV2: K');
+    }
+
+    _update(balance0, balance1, _reserve0, _reserve1); // 更新 reserve
+    emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
+}
+```
+在呼叫```swap(uint amount0Out, uint amount1Out, address to, bytes calldata data)```的時候可以選擇輸入data，如果有，就進行閃電貸，如果沒有就是一般的swap。```uniswapV2Call(msg.sender, amount0Out, amount1Out, data)```是使用者自行定義，需要在函式內完成所有閃電貸的操作，並把token還回交易對裡面。
+
+### 確認手續費公式
+在不考慮手續費的情況下:
+$$x_1y_1 = x_0y_0$$
+但是收了手續費之後:
+$$x_1y_1 > x_0y_0$$
+為了確認手續費大於0.3%，檢驗的公式改為:
+$$(x_1-0.003x_{in})(y_1-0.003y_{in}) >= x_0y_0$$
+一般來說只要確認一邊的手續費就好，為了支援閃電交換，使用可以自由選擇用哪一邊還款，才會改成上面的式子。因為solidity不支援非整數，上式將改為:
+$$(1000x_1-3x_{in})(1000y_1-3y_{in}) >= 1000000x_0y_0$$
+
+### ERC-20
+Uniswap使得任何ERC-20的代幣都可以創造交易對。
+```solidity=
+//創造新的交易對
+function createPair(address tokenA, address tokenB) external returns (address pair) {
+    require(tokenA != tokenB, 'UniswapV2: IDENTICAL_ADDRESSES'); //兩個token不能一樣
+    (address token0, address token1) = tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA); //地址比較小的token當token0
+    require(token0 != address(0), 'UniswapV2: ZERO_ADDRESS'); // 不能是空地址，address(0)常被當作燒毀幣的傳送地址
+    require(getPair[token0][token1] == address(0), 'UniswapV2: PAIR_EXISTS'); // 交易對不存在
+    bytes memory bytecode = type(UniswapV2Pair).creationCode;
+    bytes32 salt = keccak256(abi.encodePacked(token0, token1));
+    assembly {  
+        pair := create2(0, add(bytecode, 32), mload(bytecode), salt) //發布 pair 合約
+    }
+    IUniswapV2Pair(pair).initialize(token0, token1); //發布完之後初始化。
+    getPair[token0][token1] = pair; // mapping的時候正反都會存一次
+    getPair[token1][token0] = pair; 
+    allPairs.push(pair); //把交易對存起來
+    emit PairCreated(token0, token1, pair, allPairs.length); //事件
+}
+```
 
 ## 結論
-這邊只是提供Uniswap的設計細節與架構，詳細的程式碼註解我放在github。我有漏掉一些東西，像是price oracle的調用，或是對ETH的特殊處理，但是對於理解整個程式邏輯沒有太大的問題 。搭配這篇文章跟程式碼的註解一起看，應該可以很快完成uniswap的trace code。之後，我會進行alpaca finance的trace code，敬請期待下一篇文章。
+這邊只是提供Uniswap的設計細節與架構，詳細的程式碼註解我放在[github](https://gist.github.com/fb800129aa66f1c7b37986876b4511c7.git)。有個部分我沒有提到，是ETH不屬於ERC-20，與他有關的操作都是WETH代為執行。我們在發送ETH不會直接發送進交易池，而是會發給別的合約，再由該合約轉給交易池，反之亦然。
